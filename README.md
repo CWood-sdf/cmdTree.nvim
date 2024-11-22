@@ -201,6 +201,40 @@ This will create a command that can be called like this:
 
 And there will be autocompletion all the way down the tree, with almost no effort on your part.
 
+#### Repeat parameters example (2)
+
+Since the above example isnt particularly easy to follow, here's another example:
+
+```lua
+
+local cmdTree = require("cmdTree")
+
+local tree = {
+    Traverse = {
+        cmdTree.repeatParams(function(args)
+            if args.params[1] == nil then
+                return { "1" }
+            end
+            local num = tonumber(args.params[1][#args.params[1]])
+            if num > 5 then
+                return nil
+            end
+            return { (num + 1) .."" }
+        end),
+        _callback = function(args)
+            -- Do something with the args
+        end,
+    },
+}
+cmdTree.createCmd(tree, {})
+```
+
+This will create a command that can be called like this:
+
+```
+:Traverse 1 2 3 4 5 6
+```
+
 ### Optional parameters example
 
 Say you have a command that can take a flag, but it's not required. You can use the following code to achieve this:
