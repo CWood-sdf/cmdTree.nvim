@@ -29,8 +29,10 @@ local M = {}
 ---@alias CmdTree.ParameterFn fun(args: CmdTree.CmdOpts): string[]|nil
 
 ---@class CmdTree.ParameterSet
----@field tp "repeat"|"optional"|"required"
+---@field tp "repeat"|"optional"|"required"|"positional"|"flag"
+---@field required? boolean
 ---@field fn CmdTree.ParameterFn
+---@field flagSet? { [string]: boolean }
 
 ---@class (exact) CmdTree.RepeatParameter : CmdTree.ParameterSet
 ---@field tp "repeat"
@@ -45,6 +47,15 @@ local M = {}
 ---@field tp "required"
 ---@field fn CmdTree.ParameterFn
 
+---@class (exact) CmdTree.FlagParameter : CmdTree.ParameterSet
+---@field tp "flag"
+---@field fn CmdTree.ParameterFn
+---@field flagSet { [string]: boolean}
+
+---@class (exact) CmdTree.PositionalParameter : CmdTree.ParameterSet
+---@field tp "positional"
+---@field required boolean
+---@field fn CmdTree.ParameterFn
 
 ---@class CmdTree.SubTree
 ---@field _callback? fun(args: CmdTree.CmdOpts): any
@@ -69,6 +80,49 @@ function M.repeatParams(fn, maxTimes)
     return ret
 end
 
+---@return CmdTree.FlagParameter
+---@param flags string[]
+function M.flagParam(flags)
+    local flagSet = {}
+    local hasSpace = false
+    for _, v in ipairs(flagSet) do
+        if v == ' ' then
+            hasSpace = true
+            break
+        end
+    end
+    if not hasSpace then
+        table.insert(flags, ' ')
+    end
+    local i = 1
+    for _, v in ipairs(flags) do
+        flagSet[v] = i
+        i          = i + 1
+    end
+    ---@type CmdTree.FlagParameter
+    local ret = {
+        tp = "flag",
+        fn = function() return flags end,
+        flagSet = flagSet,
+    }
+    return ret
+end
+
+---@return CmdTree.PositionalParameter
+---@param required boolean
+---@param name string
+function M.positionalParam(name, required)
+    ---@type CmdTree.PositionalParameter
+    local ret = {
+        tp = "positional",
+        fn = function()
+            return { "[" .. name .. "]" }
+        end,
+        required = required,
+    }
+    return ret
+end
+
 ---@return CmdTree.RequiredParameter
 ---@param fn CmdTree.ParameterFn
 function M.optionalParams(fn)
@@ -85,13 +139,6 @@ function M.requiredParams(fn)
         tp = "required",
         fn = fn
     }
-end
-
-local function isUsableCmdTree(v)
-    if v._callback ~= nil then
-        return true
-    end
-    return false
 end
 
 local function filterCompletion(working, items)
@@ -123,6 +170,7 @@ function M.validateSubTree(tree, path)
         ::continue::
     end
     assert(keysCount > 0, "Invalid cmd tree, leaf node must have a _callback (at path " .. path .. ")")
+    local flagCount = 0
     for k, v in ipairs(tree) do
         assert(tree._callback ~= nil,
             "Invalid cmd tree, leaf node must have a _callback (given parameters, but no _callback) (at path " ..
@@ -131,15 +179,38 @@ function M.validateSubTree(tree, path)
         assert(type(v) == "table", "Invalid cmd tree, parameter must be a table (" .. location .. ")")
         assert(type(v.tp) == "string", "Invalid cmd tree, parameter must have a type (" .. location .. ")")
         assert(type(v.fn) == "function", "Invalid cmd tree, parameter must have a function (" .. location .. ")")
-        assert(v.tp == "repeat" or v.tp == "optional" or v.tp == "required",
-            "Invalid cmd tree, parameter type must be repeat, optional or required (" .. location .. ")")
+        assert(v.tp == "repeat" or v.tp == "optional" or v.tp == "required" or v.tp == "positional" or v.tp == "flag",
+            "Invalid cmd tree, parameter type must be repeat, optional, flag, positional, or required (" ..
+            location .. ")")
         if v.tp == "repeat" then
             ---@cast v CmdTree.RepeatParameter
             assert(v.maxTimes ~= nil,
                 "Invalid cmd tree, repeat parameter must have a maxTimes field (" .. location .. ")")
         end
         if v.tp == "optional" then
-            assert(k == #tree, "Invalid cmd tree, optional parameter must be last (" .. location .. ")")
+            assert(k == #tree or (k == #tree - 1 and tree[#tree].tp == "flag"),
+                "Invalid cmd tree, optional parameter must be last or last before flags (" .. location .. ")")
+        end
+        if v.tp == "flag" then
+            flagCount = flagCount + 1
+            assert(k == #tree,
+                "Invalid cmd tree, flag parameter set must be last (" .. location .. ")")
+        end
+        if flagCount > 1 then
+            error("There can only be one set of flags")
+        end
+    end
+    local isOptional = true
+    for i = #tree, 1, -1 do
+        ---@type CmdTree.ParameterSet
+        local v = tree[i]
+        ---@diagnostic disable-next-line: undefined-field
+        if v.tp == "optional" or (v.tp == "positional" and not v.required) or v.tp == "flag" then
+            if not isOptional then
+                error("There is an optional parameter preceding a required parameter")
+            end
+        else
+            isOptional = false
         end
     end
 end
@@ -180,8 +251,13 @@ end
 ---@param cmdArgs CmdTree.CmdOpts
 ---@return string[], number, number
 local function getNextParams(tree, paramIndex, repeatCount, cmdArgs)
-    if tree[paramIndex] == nil then
-        return {}, paramIndex, repeatCount
+    ::top::
+    local flags = nil
+    if #tree ~= 0 and tree[#tree].tp == "flag" then
+        flags = tree[#tree].fn(cmdArgs) or {}
+    end
+    if tree[paramIndex] == nil or (flags ~= nil and paramIndex == #tree) then
+        return flags or {}, paramIndex, repeatCount
     end
     while tree[paramIndex].tp == "repeat" do
         local t = tree[paramIndex]
@@ -194,38 +270,64 @@ local function getNextParams(tree, paramIndex, repeatCount, cmdArgs)
         elseif vals == nil then
             repeatCount = 0
             paramIndex = paramIndex + 1
-            break
+            goto top
         else
+            for _, v in ipairs(flags or {}) do
+                table.insert(vals, v)
+            end
             return vals, paramIndex, repeatCount + 1
         end
     end
     if tree[paramIndex] == nil then
-        return {}, paramIndex, repeatCount
+        return flags or {}, paramIndex, repeatCount
     end
 
     if tree[paramIndex].tp == "optional" then
         local vals = tree[paramIndex].fn(cmdArgs)
         paramIndex = paramIndex + 1
         if vals == nil then
-            return {}, paramIndex, repeatCount
+            repeatCount = 0
+            paramIndex = paramIndex + 1
+            goto top
         end
-        table.insert(vals, " ")
+        for _, v in ipairs(flags or {}) do
+            table.insert(vals, v)
+        end
         return vals, paramIndex, repeatCount
     end
     if tree[paramIndex] == nil then
-        return {}, paramIndex, repeatCount
+        return flags or {}, paramIndex, repeatCount
     end
 
-    if tree[paramIndex].tp == "required" then
+    if tree[paramIndex].tp == "required" or (tree[paramIndex].tp == "positional" and tree[paramIndex].required) then
         local vals = tree[paramIndex].fn(cmdArgs)
         paramIndex = paramIndex + 1
         if vals == nil then
-            return {}, paramIndex, repeatCount
+            repeatCount = 0
+            paramIndex = paramIndex + 1
+            goto top
+        end
+        for _, v in ipairs(flags or {}) do
+            table.insert(vals, v)
         end
         return vals, paramIndex, repeatCount
     end
 
-    return {}, paramIndex, repeatCount
+    if tree[paramIndex].tp == "positional" then
+        local vals = tree[paramIndex].fn(cmdArgs)
+        paramIndex = paramIndex + 1
+        if vals == nil then
+            repeatCount = 0
+            paramIndex = paramIndex + 1
+            goto top
+        end
+        for _, v in ipairs(flags or {}) do
+            table.insert(vals, v)
+        end
+        return vals, paramIndex, repeatCount
+    end
+
+    return flags or {}, paramIndex, repeatCount
 end
 
 ---@param tree CmdTree.SubTree
@@ -257,10 +359,11 @@ local function isCallable(tree, paramIndex)
     if tree._callback == nil then
         return "No callback found"
     end
-    if tree[paramIndex] == nil then
+    local param = tree[paramIndex]
+    if param == nil then
         return ""
     end
-    if tree[paramIndex].tp == "optional" then
+    if param.tp == "optional" or (param.tp == "positional" and not param.required) or param.tp == "flag" then
         return ""
     end
     return "Missing parameters"
@@ -296,7 +399,7 @@ local function traverseTree(tree, fargs, cmdArgs, expected, i, paramIndex, isPar
     -- If we have gone through all the current parameters, then we just return what we expect the next parameters to be
     -- Also return an error message for when it's command time
     if i > #fargs then
-        paramIndex = newParamIndex
+        -- paramIndex = newParamIndex
         return expected, tree, isCallable(tree, paramIndex)
     end
 
@@ -313,18 +416,22 @@ local function traverseTree(tree, fargs, cmdArgs, expected, i, paramIndex, isPar
 
     local found = false
     -- if there is an expected space, then it is optional
-    local hasSpace = false
+    local isOptional = false
     for _, v in ipairs(expected) do
         if v == fargs[i] then
             found = true
             break
         end
+        if v:sub(1, 1) == '[' and fargs[i] ~= nil and #fargs[i] ~= 0 then
+            found = true
+            break
+        end
         if v == " " then
-            hasSpace = true
+            isOptional = true
         end
     end
     --- Basically the user ignored an optional parameter and is now on any random extra parameters (this is the same case as #expected == 0)
-    if not found and hasSpace then
+    if not found and isOptional then
         paramIndex = newParamIndex
         repeatCount = newRepeatCount
         cmdArgs.params[paramIndex] = cmdArgs.params[paramIndex] or {}
@@ -342,13 +449,22 @@ local function traverseTree(tree, fargs, cmdArgs, expected, i, paramIndex, isPar
     local current = fargs[i]
 
     if tree[current] ~= nil and not isParams then
+        -- descend the currently defined tree
         local newTree = tree[current]
         local newPI, newRC = 0, 0
         expected, newPI, newRC = getPossibleParams(newTree, 1, 0, cmdArgs)
         return traverseTree(tree[current], fargs, cmdArgs, expected, i + 1, paramIndex, false, repeatCount, newPI, newRC)
     else
-        cmdArgs.params[paramIndex] = cmdArgs.params[paramIndex] or {}
-        table.insert(cmdArgs.params[paramIndex], current)
+        -- we have reached a flag, we must update the new index to the end
+        if tree[#tree].tp == "flag" and tree[#tree].flagSet[fargs[i]] ~= nil then
+            newParamIndex = paramIndex
+            cmdArgs.params[#tree] = cmdArgs.params[#tree] or {}
+            table.insert(cmdArgs.params[#tree], current)
+        else
+            cmdArgs.params[paramIndex] = cmdArgs.params[paramIndex] or {}
+            table.insert(cmdArgs.params[paramIndex], current)
+        end
+        -- otherwise add a param to the param list
         paramIndex = newParamIndex
         repeatCount = newRepeatCount
         isParams = true
@@ -440,7 +556,8 @@ function M.getComplete(tree, name, working, current, cmdOpts)
         params = {},
     }
     -- return { "sdf" }
-    return filterCompletion(working, traverseTree(tree, fargs, cmdArgs))
+    local cmpl = traverseTree(tree, fargs, cmdArgs)
+    return filterCompletion(working, cmpl)
 end
 
 ---@param tree CmdTree.SubTree
@@ -506,27 +623,46 @@ function M.setup(opts)
     end
 end
 
+--- this is here for testing purposes only
 ---@type CmdTree.CmdTree
 testTree = {
     Test = {
-        yeet = {
+        idk = {
+            asdf = {
+                _callback = function(args)
+                    print(vim.inspect(args.params))
+                end,
+
+            },
             _callback = function(args)
-                print("yeet " .. #args.params)
+                print(vim.inspect(args.params))
+            end,
+            M.positionalParam("name", true),
+            M.positionalParam("asdf", false),
+            M.positionalParam("asdf2", false),
+            M.optionalParams(function()
+                return { "a", 'b', 'c' }
+            end),
+            M.flagParam({ '-f', '-v', '-a', '-b' }),
+        },
+        thing = {
+            _callback = function(args)
+                print("thing " .. #args.params)
             end,
 
             M.requiredParams(function()
-                return { "yeet", "yote", "huh" }
+                return { "thing", "yote", "huh" }
             end),
             M.requiredParams(function(args)
-                if args.params[1][1] == "yeet" then
-                    return { "req_yeet" }
+                if args.params[1][1] == "thing" then
+                    return { "req_thing" }
                 elseif args.params[1][1] == "yote" then
                     return { "req_yote" }
                 end
                 return { "huh" }
             end),
             M.repeatParams(function(args)
-                if args.params[1][1] == "yeet" then
+                if args.params[1][1] == "thing" then
                     return { "sdf" }
                 elseif args.params[1][1] == "yote" then
                     return { "yotesdf" }
@@ -534,8 +670,8 @@ testTree = {
                 return nil
             end, 2),
             M.optionalParams(function(args)
-                if args.params[2][1] == "yeet" then
-                    return { "yeet" }
+                if args.params[2][1] == "thing" then
+                    return { "thing" }
                 end
                 return { "optional" }
             end),
@@ -556,12 +692,12 @@ testTree = {
             M.repeatParams(function()
                 return nil
             end),
-            M.repeatParams(function(args)
-                return nil
-            end),
             M.requiredParams(function()
                 return { "required" }
             end),
+            -- M.repeatParams(function(args)
+            --     return nil
+            -- end),
             M.optionalParams(function()
                 return { "optional" }
             end),

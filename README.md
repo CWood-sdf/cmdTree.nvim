@@ -6,6 +6,12 @@ A simple library that allows you to create your commands in a declarative way th
 
 CmdTree can either be added as a dependency to your project, or you can copy the init.lua file to your project.
 
+## Setup
+
+Just create a tree (as described in numerous ways below), and call `require('cmdTree').createCmd(tree)`
+
+The `.setup()` function is really only for testing purposes
+
 ## Usage
 
 CmdTree allows basic command/subcommand structuring
@@ -80,11 +86,13 @@ This will throw an error if you try to call `:Cmd` because `:Cmd` does not have 
 
 CmdTree also allows each subcommand to have parameters.
 
-There are three kinds of parameters that commands can have:
+There are five kinds of parameters that commands can have:
 
 1. Required parameters: These are parameters that are required for the command to work. If they are not provided, the command will not be executed and throw an error.
 2. Repeated parameters: These are parameters that can be repeated. This may sound not useful, but for each repeat, the parameters allowed are regenerated. This is useful if you have a command that is traversing a tree or something similar.
 3. Optional parameters: These parameters are not required for the command to run, however there can only be one, and it must be the last parameter.
+4. Positional parameters: These are parameters that must be at a specific index in the parameter list and can take any value
+5. Flags: these are parameters that are optional and can be repeated as many times as needed
 
 ### Required parameters example
 
@@ -231,6 +239,104 @@ or like this:
 ```
 
 In autocompletion, the user will be presented with either the choice of inserting the flag or a space.
+
+### Positional Parameters example
+
+Positional parameters are parameters that must be at some specific index and can take any value
+
+For example, the shell command `rm` has a positional paramter of a filename
+
+Positional parameters, since they can take any value, only suggest `[name]` as their autocompletion, where the value of `name` is the parameter to the positionalParam function
+
+```lua
+local cmdTree = require("cmdTree")
+
+local tree = {
+    Cmd = {
+        cmdTree.positionalParam("word", true),
+        _callback = function(args)
+            print("The passed word is " .. args.params[1][1])
+        end,
+    },
+}
+
+cmdTree.createCmd(tree, {})
+```
+
+That creates a command that can be called like:
+
+```
+:Cmd hello
+```
+
+Positional parameters can also be optional, this can be done by setting the second argument to `positionalParam` to `false`. Optional positional parameters are not allowed to preceded required positional parameters, repeated parameters, or required parameters:
+
+```lua
+local cmdTree = require("cmdTree")
+
+local tree = {
+    Cmd = {
+        cmdTree.positionalParam("word", false),
+        _callback = function(args)
+            print("The passed word is " .. (args.params[1] or {"no param"})[1])
+        end,
+    },
+}
+
+cmdTree.createCmd(tree, {})
+```
+
+That creates a command that can be called like:
+
+```
+:Cmd hello
+```
+
+or
+
+```
+:Cmd
+```
+
+### Flag examples
+
+You can also allow flags to be passed to the declared command. Flags _MUST_ be the last declared parameters to a subtree, however they can be put in the command in any order.
+
+```lua
+local cmdTree = require("cmdTree")
+
+local tree = {
+    Cmd = {
+        cmdTree.positionalParam("word", true),
+        cmdTree.flagParam({ '-f', '-r', '-a', '-b' }),
+        _callback = function(args)
+            print("The passed word is " .. args.params[1][1])
+            -- all flags, no matter placement in argument list will end up in the proper params index
+            print("The passed flags are: " .. vim.inspect(args.params[2]))
+        end,
+    },
+}
+
+cmdTree.createCmd(tree, {})
+```
+
+This creates a command that can be called like:
+
+```
+:Cmd -f -r asdf
+```
+
+or
+
+```
+:Cmd asdf -f -r -a
+```
+
+or
+
+```
+:Cmd -b asdf -a
+```
 
 ## Api
 
