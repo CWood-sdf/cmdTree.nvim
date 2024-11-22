@@ -273,7 +273,9 @@ local function getNextParams(tree, paramIndex, repeatCount, cmdArgs)
             goto top
         else
             for _, v in ipairs(flags or {}) do
-                table.insert(vals, v)
+                if v ~= ' ' then
+                    table.insert(vals, v)
+                end
             end
             return vals, paramIndex, repeatCount + 1
         end
@@ -308,7 +310,9 @@ local function getNextParams(tree, paramIndex, repeatCount, cmdArgs)
             goto top
         end
         for _, v in ipairs(flags or {}) do
-            table.insert(vals, v)
+            if v ~= ' ' then
+                table.insert(vals, v)
+            end
         end
         return vals, paramIndex, repeatCount
     end
@@ -647,22 +651,22 @@ testTree = {
         },
         thing = {
             _callback = function(args)
-                print("thing " .. #args.params)
+                print("yeet " .. #args.params)
             end,
 
             M.requiredParams(function()
-                return { "thing", "yote", "huh" }
+                return { "yeet", "yote", "huh" }
             end),
             M.requiredParams(function(args)
-                if args.params[1][1] == "thing" then
-                    return { "req_thing" }
+                if args.params[1][1] == "yeet" then
+                    return { "req_yeet" }
                 elseif args.params[1][1] == "yote" then
                     return { "req_yote" }
                 end
                 return { "huh" }
             end),
             M.repeatParams(function(args)
-                if args.params[1][1] == "thing" then
+                if args.params[1][1] == "yeet" then
                     return { "sdf" }
                 elseif args.params[1][1] == "yote" then
                     return { "yotesdf" }
@@ -670,8 +674,8 @@ testTree = {
                 return nil
             end, 2),
             M.optionalParams(function(args)
-                if args.params[2][1] == "thing" then
-                    return { "thing" }
+                if args.params[2][1] == "yeet" then
+                    return { "yeet" }
                 end
                 return { "optional" }
             end),
