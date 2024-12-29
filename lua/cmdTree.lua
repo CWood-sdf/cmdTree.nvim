@@ -358,8 +358,10 @@ end
 
 ---@param tree CmdTree.SubTree
 ---@param paramIndex number
+---@param expected? string[]
+---@param newParamIndex number
 ---@return string
-local function isCallable(tree, paramIndex)
+local function isCallable(tree, paramIndex, expected, newParamIndex)
     if tree._callback == nil then
         return "No callback found"
     end
@@ -369,6 +371,10 @@ local function isCallable(tree, paramIndex)
     end
     if param.tp == "optional" or (param.tp == "positional" and not param.required) or param.tp == "flag" then
         return ""
+    end
+    if param.tp == "repeat" and paramIndex ~= newParamIndex then
+        paramIndex = newParamIndex
+        return isCallable(tree, newParamIndex, expected, newParamIndex)
     end
     return "Missing parameters"
 end
@@ -404,7 +410,7 @@ local function traverseTree(tree, fargs, cmdArgs, expected, i, paramIndex, isPar
     -- Also return an error message for when it's command time
     if i > #fargs then
         -- paramIndex = newParamIndex
-        return expected, tree, isCallable(tree, paramIndex)
+        return expected, tree, isCallable(tree, paramIndex, expected)
     end
 
     -- This is when we have extra parameters that can't have completion provided
