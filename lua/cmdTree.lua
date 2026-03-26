@@ -25,6 +25,7 @@ local M = {}
 ---@field mods table
 ---@field smods table
 ---@field params string[][]
+---@field positional { [string]: string }
 
 ---@alias CmdTree.ParameterFn fun(args: CmdTree.CmdOpts): string[]|nil
 
@@ -301,6 +302,12 @@ local function getNextParams(tree, paramIndex, repeatCount, cmdArgs)
         return flags or {}, paramIndex, repeatCount
     end
 
+    if tree[paramIndex].tp == "positional" then
+        local name = tree[paramIndex].fn(cmdArgs)[1]
+        name = name:sub(2, #name - 1)
+        cmdArgs.positional[name] = cmdArgs.fargs[paramIndex + 1]
+    end
+
     if tree[paramIndex].tp == "required" or (tree[paramIndex].tp == "positional" and tree[paramIndex].required) then
         local vals = tree[paramIndex].fn(cmdArgs)
         paramIndex = paramIndex + 1
@@ -564,6 +571,7 @@ function M.getComplete(tree, name, working, current, cmdOpts)
         mods = {},
         smods = {},
         params = {},
+        positional = {},
     }
     -- return { "sdf" }
     local cmpl = traverseTree(tree, fargs, cmdArgs)
@@ -586,6 +594,7 @@ function M.createCmdForTree(tree, name, opts)
     local cmdCallback = function(cmdOpts)
         ---@cast cmdOpts CmdTree.CmdOpts
         cmdOpts.params = {}
+        cmdOpts.positional = {}
         local _, t, callable = traverseTree(tree, cmdOpts.fargs, cmdOpts)
         if callable ~= "" then
             error(callable)
@@ -646,6 +655,9 @@ testTree = {
             },
             _callback = function(args)
                 print(vim.inspect(args.params))
+                print(args.positional.name)
+                print(args.positional.asdf)
+                print(args.positional.asdf2)
             end,
             M.positionalParam("name", true),
             M.positionalParam("asdf", false),
